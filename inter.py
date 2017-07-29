@@ -18,15 +18,15 @@ class Source:
     def next(self):
         self.index += 1
 
-    def peek(self) -> Optional[str]:
-        if len(self.src) <= self.index:
+    def peek(self, length: int=1) -> Optional[str]:
+        if len(self.src) < self.index + length:
             return None
-        return self.src[self.index]
+        return self.src[self.index:self.index + length]
 
-    def peek_char(self) -> Optional[str]:
+    def peek_char(self, length: int=1) -> Optional[str]:
         self.save()
         self.skip_spaces()
-        result = self.peek()
+        result = self.peek(length)
         self.restore()
         return result
 
@@ -84,6 +84,79 @@ class Node:
 
 class ExpressionNode(Node):
     def eval(self):
+        return self.children[0].eval()
+
+    @classmethod
+    def parse(cls, src: Source) -> Node:
+        children: List[Node] = []
+        try:
+            with src:
+                return ExpressionNode([IfThenElseNode.parse(src)])
+        except ParseError:
+            return ExpressionNode([ArithmeticExpressionNode.parse(src)])
+
+    def __repr__(self) -> str:
+        return str(self.children[0])
+
+
+class IfThenElseNode(Node):
+    def eval(self):
+        if_e, then_e, else_e = self.children
+        return then_e.eval() if if_e.eval() else else_e.eval()
+
+    @classmethod
+    def parse(cls, src: Source) -> Node:
+        kw = KeywordNode.parse(src).eval()
+        if kw != 'if':
+            raise ParseError(src, f'expected `if` but `{kw}` found')
+        if_exp = ExpressionNode.parse(src)
+
+        kw = KeywordNode.parse(src).eval()
+        if kw != 'then':
+            raise ParseError(src, f'expected `then` but `{kw}` found')
+        then_exp = ExpressionNode.parse(src)
+
+        kw = KeywordNode.parse(src).eval()
+        if kw != 'else':
+            raise ParseError(src, f'expected `else` but `{kw}` found')
+        else_exp = ExpressionNode.parse(src)
+
+        return IfThenElseNode([if_exp, then_exp, else_exp])
+
+    def __repr__(self) -> str:
+        return ' '.join(f'{kw} {node.eval()}' for (kw, node) in
+                        zip(['if', 'then', 'else'], self.children))
+
+
+class KeywordNode(Node):
+    keywords = {
+        'if',
+        'then',
+        'else',
+    }
+
+    def eval(self):
+        return ''.join(c.eval() for c in self.children)
+
+    @classmethod
+    def parse(cls, src: Source) -> Node:
+        src.skip_spaces()
+        chars = []
+        while src.peek() and not is_space(src.peek()):
+            chars.append(CharNode.parse(src))
+
+        detected = ''.join(c.eval() for c in chars)
+        if detected not in cls.keywords:
+            raise ParseError(src, f'`{detected}` is not a keyword')
+
+        return KeywordNode(chars)
+
+    def __repr__(self) -> str:
+        return self.eval()
+
+
+class ArithmeticExpressionNode(Node):
+    def eval(self):
         result = 0
         for (sign, node) in zip(self.children[0::2], self.children[1::2]):
             if sign.eval() == '+':
@@ -101,10 +174,11 @@ class ExpressionNode(Node):
         while src.peek_char() in {'+', '-'}:
             children.append(CharNode.parse(src))
             children.append(TermNode.parse(src))
-        return ExpressionNode(children)
+        return ArithmeticExpressionNode(children)
 
     def __repr__(self) -> str:
-        return ' '.join(str(c) for c in self.children)
+        head, *tail = self.children
+        return head.eval().replace('+', '') + ' '.join(str(c) for c in tail)
 
 
 class TermNode(Node):
@@ -205,6 +279,12 @@ print(expr.eval())
 expr = parse('- (20 - 10) ')
 print(expr)
 print(expr.eval())
-expr = parse('-20 + 10)')
+expr = parse('-20 + 10')
+print(expr)
+print(expr.eval())
+expr = parse('if 2 + 5 then -20 + 10 else 1')
+print(expr)
+print(expr.eval())
+expr = parse('(if 2 - 2 then -20 + 10 else 1) + 5')
 print(expr)
 print(expr.eval())
