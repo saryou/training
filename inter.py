@@ -82,6 +82,23 @@ class Node:
         pass
 
 
+class BlockNode(Node):
+    def eval(self):
+        return [c.eval() for c in self.children]
+
+    @classmethod
+    def parse(cls, src: Source) -> Node:
+        children: List[Node] = [ExpressionNode.parse(src)]
+        while src.peek_char() == ';':
+            CharNode.parse(src)
+            if src.peek_char() is not None:
+                children.append(ExpressionNode.parse(src))
+        return BlockNode(children)
+
+    def __repr__(self) -> str:
+        return '\n'.join(str(c) for c in self.children)
+
+
 class ExpressionNode(Node):
     def eval(self):
         return self.children[0].eval()
@@ -267,7 +284,7 @@ class CharNode(Node):
 
 def parse(text: str) -> Node:
     src = Source(text)
-    expr = ExpressionNode.parse(src)
+    expr = BlockNode.parse(src)
     if src.peek_char() is not None:
         raise ParseError(src, f'unexpected character `{src.peek_char()}` found')
     return expr
@@ -282,9 +299,6 @@ print(expr.eval())
 expr = parse('-20 + 10')
 print(expr)
 print(expr.eval())
-expr = parse('if 2 + 5 then -20 + 10 else 1')
-print(expr)
-print(expr.eval())
-expr = parse('(if 2 - 2 then -20 + 10 else 1) + 5')
+expr = parse('if 2 + 5 then -20 + 10 else 1; (if 2 - 2 then -20 + 10 else 1) + 5')
 print(expr)
 print(expr.eval())
