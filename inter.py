@@ -117,7 +117,7 @@ class ExpressionNode(Node):
     def parse(cls, src: Source) -> Node:
         try:
             with src:
-                return ExpressionNode([DefinitionNode.parse(src)])
+                return ExpressionNode([AssignmentNode.parse(src)])
         except ParseError:
             pass
 
@@ -133,7 +133,7 @@ class ExpressionNode(Node):
         return str(self.children[0])
 
 
-class DefinitionNode(Node):
+class AssignmentNode(Node):
     def eval(self, context: Optional[Context]=None):
         val = self.children[1].eval(context)
         context[self.children[0].eval(context)] = val
@@ -146,7 +146,7 @@ class DefinitionNode(Node):
         if equal.eval() != '=':
             raise ParseError(src)
         expr = ExpressionNode.parse(src)
-        return DefinitionNode([identifier, expr])
+        return AssignmentNode([identifier, expr])
 
     def __repr__(self) -> str:
         identifier, expr = self.children
