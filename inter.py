@@ -4,9 +4,19 @@ import re
 
 _spaces = re.compile('\s')
 
+_keywords = {
+    'if',
+    'then',
+    'else',
+}
+
 
 def is_space(char: str) -> bool:
     return bool(char and _spaces.match(char))
+
+
+class Context(dict):
+    pass
 
 
 class Source:
@@ -74,7 +84,7 @@ class Node:
     def append(self, node: 'Node'):
         self.children.append(node)
 
-    def eval(self):
+    def eval(self, context: Optional[Context]=None):
         pass
 
     @classmethod
@@ -83,8 +93,8 @@ class Node:
 
 
 class BlockNode(Node):
-    def eval(self):
-        return [c.eval() for c in self.children]
+    def eval(self, context: Optional[Context]=None):
+        return [c.eval(context) for c in self.children]
 
     @classmethod
     def parse(cls, src: Source) -> Node:
@@ -100,26 +110,53 @@ class BlockNode(Node):
 
 
 class ExpressionNode(Node):
-    def eval(self):
-        return self.children[0].eval()
+    def eval(self, context: Optional[Context]=None):
+        return self.children[0].eval(context)
 
     @classmethod
     def parse(cls, src: Source) -> Node:
-        children: List[Node] = []
+        try:
+            with src:
+                return ExpressionNode([DefinitionNode.parse(src)])
+        except ParseError:
+            pass
+
         try:
             with src:
                 return ExpressionNode([IfThenElseNode.parse(src)])
         except ParseError:
-            return ExpressionNode([ArithmeticExpressionNode.parse(src)])
+            pass
+
+        return ExpressionNode([ArithmeticExpressionNode.parse(src)])
 
     def __repr__(self) -> str:
         return str(self.children[0])
 
 
+class DefinitionNode(Node):
+    def eval(self, context: Optional[Context]=None):
+        val = self.children[1].eval(context)
+        context[self.children[0].eval(context)] = val
+        return val
+
+    @classmethod
+    def parse(cls, src: Source) -> Node:
+        identifier = IdentifierNode.parse(src)
+        equal = CharNode.parse(src)
+        if equal.eval() != '=':
+            raise ParseError(src)
+        expr = ExpressionNode.parse(src)
+        return DefinitionNode([identifier, expr])
+
+    def __repr__(self) -> str:
+        identifier, expr = self.children
+        return f'{identifier} = {expr}'
+
+
 class IfThenElseNode(Node):
-    def eval(self):
+    def eval(self, context: Optional[Context]=None):
         if_e, then_e, else_e = self.children
-        return then_e.eval() if if_e.eval() else else_e.eval()
+        return then_e.eval(context) if if_e.eval(context) else else_e.eval(context)
 
     @classmethod
     def parse(cls, src: Source) -> Node:
@@ -146,14 +183,8 @@ class IfThenElseNode(Node):
 
 
 class KeywordNode(Node):
-    keywords = {
-        'if',
-        'then',
-        'else',
-    }
-
-    def eval(self):
-        return ''.join(c.eval() for c in self.children)
+    def eval(self, context: Optional[Context]=None):
+        return ''.join(c.eval(context) for c in self.children)
 
     @classmethod
     def parse(cls, src: Source) -> Node:
@@ -163,7 +194,7 @@ class KeywordNode(Node):
             chars.append(CharNode.parse(src))
 
         detected = ''.join(c.eval() for c in chars)
-        if detected not in cls.keywords:
+        if detected not in _keywords:
             raise ParseError(src, f'`{detected}` is not a keyword')
 
         return KeywordNode(chars)
@@ -173,13 +204,13 @@ class KeywordNode(Node):
 
 
 class ArithmeticExpressionNode(Node):
-    def eval(self):
+    def eval(self, context: Optional[Context]=None):
         result = 0
         for (sign, node) in zip(self.children[0::2], self.children[1::2]):
-            if sign.eval() == '+':
-                result += node.eval()
-            elif sign.eval() == '-':
-                result -= node.eval()
+            if sign.eval(context) == '+':
+                result += node.eval(context)
+            elif sign.eval(context) == '-':
+                result -= node.eval(context)
         return result
 
     @classmethod
@@ -199,13 +230,13 @@ class ArithmeticExpressionNode(Node):
 
 
 class TermNode(Node):
-    def eval(self):
-        result = self.children[0].eval()
+    def eval(self, context: Optional[Context]=None):
+        result = self.children[0].eval(context)
         for (sign, node) in zip(self.children[1::2], self.children[2::2]):
-            if sign.eval() == '*':
-                result *= node.eval()
-            elif sign.eval() == '/':
-                result /= node.eval()
+            if sign.eval(context) == '*':
+                result *= node.eval(context)
+            elif sign.eval(context) == '/':
+                result /= node.eval(context)
         return result
 
     @classmethod
@@ -221,8 +252,8 @@ class TermNode(Node):
 
 
 class FactorNode(Node):
-    def eval(self):
-        return self.children[0].eval()
+    def eval(self, context: Optional[Context]=None):
+        return self.children[0].eval(context)
 
     @classmethod
     def parse(cls, src: Source) -> Node:
@@ -235,6 +266,13 @@ class FactorNode(Node):
                     raise ParseError(src)
             return FactorNode([exp])
         except ParseError:
+            pass
+
+        try:
+            with src:
+                reference = ReferenceNode.parse(src)
+            return FactorNode([reference])
+        except ParseError:
             return FactorNode([NumberNode.parse(src)])
 
     def __repr__(self) -> str:
@@ -242,11 +280,52 @@ class FactorNode(Node):
         return f'({c})' if isinstance(c, ExpressionNode) else str(c)
 
 
+class ReferenceNode(Node):
+    def eval(self, context: Optional[Context]=None):
+        identifier = self.children[0].eval(context)
+        if identifier not in context:
+            raise RuntimeError(f'`{identifier}` is not defined')
+        return context[identifier]
+
+    @classmethod
+    def parse(cls, src: Source) -> Node:
+        return ReferenceNode([IdentifierNode.parse(src)])
+
+    def __repr__(self) -> str:
+        return str(self.children[0])
+
+
+class IdentifierNode(Node):
+    chars = {chr(ord('a') + i) for i in range(26)}
+    chars_and_digits = chars.union((str(i) for i in range(10)))
+
+    def eval(self, context: Optional[Context]=None):
+        return ''.join(c.eval(context) for c in self.children)
+
+    @classmethod
+    def parse(cls, src: Source) -> Node:
+        src.skip_spaces()
+        if src.peek() not in cls.chars:
+            raise ParseError(src)
+
+        chars = [CharNode.parse(src)]
+        while src.peek() in cls.chars_and_digits:
+            chars.append(CharNode.parse(src))
+
+        node = IdentifierNode(chars)
+        if node.eval() in _keywords:
+            raise ParseError(src, f'`{node.eval()}` is reserved')
+        return node
+
+    def __repr__(self) -> str:
+        return self.eval()
+
+
 class NumberNode(Node):
     numbers = {str(i) for i in range(10)}
 
-    def eval(self):
-        return int(''.join([c.eval() for c in self.children]))
+    def eval(self, context: Optional[Context]=None):
+        return int(''.join([c.eval(context) for c in self.children]))
 
     @classmethod
     def parse(cls, src: Source) -> Node:
@@ -266,7 +345,7 @@ class CharNode(Node):
         super().__init__([])
         self.char = char
 
-    def eval(self):
+    def eval(self, context: Optional[Context]=None):
         return self.char
 
     @classmethod
@@ -290,15 +369,26 @@ def parse(text: str) -> Node:
     return expr
 
 
-expr = parse('12*5+ (2+3) *10+20/02')
-print(expr)
-print(expr.eval())
-expr = parse('- (20 - 10) ')
-print(expr)
-print(expr.eval())
-expr = parse('-20 + 10')
-print(expr)
-print(expr.eval())
-expr = parse('if 2 + 5 then -20 + 10 else 1; (if 2 - 2 then -20 + 10 else 1) + 5')
-print(expr)
-print(expr.eval())
+if __name__ == '__main__':
+    expr = parse('12*5+ (2+3) *10+20/02')
+    print(expr)
+    print(expr.eval(Context()))
+    expr = parse('- (20 - 10) ')
+    print(expr)
+    print(expr.eval(Context()))
+    expr = parse('-20 + 10')
+    print(expr)
+    print(expr.eval(Context()))
+    expr = parse('if 2 + 5 then -20 + 10 else 1; (if 2 - 2 then -20 + 10 else 1) + 5')
+    print(expr)
+    print(expr.eval(Context()))
+
+    expr = parse('''
+a = 2;
+a;
+a = a * 5;
+b = a * 5;
+a + b;
+''')
+    print(expr)
+    print(expr.eval(Context()))
